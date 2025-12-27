@@ -246,15 +246,63 @@ def generate_analysis_data():
 st.markdown("<br>", unsafe_allow_html=True)
 
 if st.button("🔍 Run Price Optimization"):
+
     price, profit = recommend_price()
+    analysis_df = generate_analysis_data()
 
-    st.success("✅ Price Optimization Completed")
+    expected_volume = int(
+        analysis_df.loc[analysis_df["Price (₹)"] == price, "Expected Volume (L)"].values[0]
+    )
+    margin = round(price - cost, 2)
 
-    c1, c2 = st.columns(2)
-    c1.metric("💰 Recommended Price (₹)", price)
-    c2.metric("📈 Expected Profit Index", profit)
+    # SUCCESS BANNER
+    st.markdown(
+        "<div style='background:#123f2a;padding:15px;border-radius:8px;color:#7CFFB2;'>"
+        "✅ Price Recommendation Generated Successfully</div>",
+        unsafe_allow_html=True
+    )
 
-# ----------------------------------
-# FOOTER
-# ----------------------------------
-st.caption("⚠️ ML-based recommendation. Always validate with business context.")
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # KPI CARDS
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Recommended Price", f"₹{price}", f"+{round(price-last_price,2)}")
+    k2.metric("Expected Volume", f"{expected_volume:,} L")
+    k3.metric("Expected Profit", f"₹{round(profit,2):,}")
+    k4.metric("Profit Margin", f"₹{margin}/L")
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.subheader("📊 Price Optimization Analysis")
+
+    # TABS
+    tab1, tab2, tab3 = st.tabs(
+        ["📈 Profit Curve", "📊 Volume vs Price", "📄 Data Table"]
+    )
+
+    # -------- PROFIT CURVE --------
+    with tab1:
+        fig, ax = plt.subplots()
+        ax.plot(
+            analysis_df["Price (₹)"],
+            analysis_df["Expected Profit (₹)"],
+            marker="o"
+        )
+        ax.set_xlabel("Price (₹)")
+        ax.set_ylabel("Expected Profit (₹)")
+        st.pyplot(fig)
+
+    # -------- VOLUME VS PRICE --------
+    with tab2:
+        fig, ax = plt.subplots()
+        ax.bar(
+            analysis_df["Price (₹)"],
+            analysis_df["Expected Volume (L)"]
+        )
+        ax.set_xlabel("Price (₹)")
+        ax.set_ylabel("Expected Volume (L)")
+        st.pyplot(fig)
+
+    # -------- DATA TABLE --------
+    with tab3:
+        st.dataframe(analysis_df, use_container_width=True)
+
