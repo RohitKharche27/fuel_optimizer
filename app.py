@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
 from xgboost import XGBRegressor
 from sklearn.model_selection import train_test_split
 from datetime import date
@@ -10,10 +9,7 @@ import os
 # ----------------------------------
 # PAGE CONFIG
 # ----------------------------------
-st.set_page_config(
-    page_title="Fuel Price Optimization",
-    layout="wide"
-)
+st.set_page_config(page_title="Fuel Price Optimization", layout="wide")
 
 # ----------------------------------
 # SESSION STATE
@@ -22,7 +18,7 @@ if "run" not in st.session_state:
     st.session_state.run = False
 
 # ----------------------------------
-# CUSTOM DARK THEME
+# DARK THEME
 # ----------------------------------
 st.markdown("""
 <style>
@@ -93,12 +89,14 @@ def train_model(df):
         "price_ma_7","price_ma_14",
         "day_of_week","month"
     ]
+
     X = df[FEATURES]
     y = df["demand_proxy"]
+
     X_train, _, y_train, _ = train_test_split(X, y, shuffle=False)
 
     model = XGBRegressor(
-        n_estimators=300,
+        n_estimators=200,
         max_depth=5,
         learning_rate=0.05,
         subsample=0.8,
@@ -136,14 +134,14 @@ with c2:
     comp3 = st.number_input("Competitor 3 (₹)", value=float(df["comp3_price"].iloc[-1]))
 
 # ----------------------------------
-# OPTIMIZATION FUNCTIONS
+# ANALYSIS FUNCTION
 # ----------------------------------
-def get_analysis_df():
+def build_analysis_df():
     comp_avg = np.mean([comp1, comp2, comp3])
     prices = np.linspace(last_price - MAX_DAILY_CHANGE,
-                         last_price + MAX_DAILY_CHANGE, 30)
-    rows = []
+                         last_price + MAX_DAILY_CHANGE, 25)
 
+    rows = []
     for p in prices:
         if p < cost + MIN_MARGIN or p > comp_avg + MAX_COMP_DIFF:
             continue
@@ -184,45 +182,28 @@ if st.button("🔍 Run Price Optimization"):
 # RESULTS
 # ----------------------------------
 if st.session_state.run:
+    df_analysis = build_analysis_df()
+    best = df_analysis.loc[df_analysis["Expected Profit"].idxmax()]
 
-    analysis_df = get_analysis_df()
-    best_row = analysis_df.loc[analysis_df["Expected Profit"].idxmax()]
-
-    # SUCCESS
     st.success("✅ Price Optimization Completed")
 
-    # KPI CARDS
     k1, k2, k3, k4 = st.columns(4)
-    k1.metric("Recommended Price", f"₹{best_row['Price (₹)']}")
-    k2.metric("Expected Volume", f"{int(best_row['Expected Volume']):,} L")
-    k3.metric("Expected Profit", f"₹{best_row['Expected Profit']:,}")
-    k4.metric("Profit Margin", f"₹{best_row['Profit Margin']}/L")
+    k1.metric("Recommended Price", f"₹{best['Price (₹)']}")
+    k2.metric("Expected Volume", f"{best['Expected Volume']:,} L")
+    k3.metric("Expected Profit", f"₹{best['Expected Profit']:,}")
+    k4.metric("Profit Margin", f"₹{best['Profit Margin']}/L")
 
     st.subheader("📊 Price Optimization Analysis")
 
-    tab1, tab2, tab3 = st.tabs(
-        ["📈 Profit Curve", "📊 Volume vs Price", "📄 Data Table"]
-    )
+    tab1, tab2, tab3 = st.tabs(["📈 Profit Curve", "📊 Volume vs Price", "📄 Data Table"])
 
     with tab1:
-        fig, ax = plt.subplots()
-        ax.plot(analysis_df["Price (₹)"], analysis_df["Expected Profit"], marker="o")
-        ax.set_xlabel("Price (₹)")
-        ax.set_ylabel("Expected Profit")
-        st.pyplot(fig)
-        
+        st.line_chart(df_analysis.set_index("Price (₹)")["Expected Profit"])
 
     with tab2:
-        fig, ax = plt.subplots()
-        ax.bar(analysis_df["Price (₹)"], analysis_df["Expected Volume"])
-        ax.set_xlabel("Price (₹)")
-        ax.set_ylabel("Expected Volume")
-        st.pyplot(fig)
+        st.bar_chart(df_analysis.set_index("Price (₹)")["Expected Volume"])
 
     with tab3:
-        st.dataframe(analysis_df, use_container_width=True)
+        st.dataframe(df_analysis, use_container_width=True)
 
-# ----------------------------------
-# FOOTER
-# ----------------------------------
 st.caption("⚠️ ML-based recommendation. Always validate with business context.")
