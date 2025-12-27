@@ -1,61 +1,185 @@
 import streamlit as st
 import pandas as pd
-import pickle
 import numpy as np
+from xgboost import XGBRegressor
+from sklearn.model_selection import train_test_split
+import os
 
-# Page config
-st.set_page_config(page_title="Fuel Price Prediction", layout="centered")
+# ------------------------------------
+# PAGE CONFIG
+# ------------------------------------
+st.set_page_config(page_title="Dynamic Pricing System", layout="wide")
 
-st.title("⛽ Fuel Price / Demand Prediction App")
+st.title("⛽ Dynamic Pricing Recommendation System")
+st.caption("ML-based pricing engine using XGBoost with business guardrails")
 
-# Load model
-@st.cache_resource
-def load_model():
-    with open("fuel_prediction.pkl", "rb") as f:
-        model = pickle.load(f)
-    return model
+# ------------------------------------
+# BUSINESS RULES
+# ------------------------------------
+MAX_DAILY_CHANGE = 0.05     # 5%
+MIN_MARGIN = 0.03           # 3%
+COMPETITIVE_LIMIT = 0.02   # 2%
 
-model = load_model()
+# ------------------------------------
+# LOAD DATA (NO UPLOAD)
+# ------------------------------------
+DATA_PATH = "oil.csv"
 
-# Load dataset (optional – for reference)
 @st.cache_data
 def load_data():
-    return pd.read_csv("oil.csv")
+    if not os.path.exists(DATA_PATH):
+        st.error("❌ oil.csv not found. Please place it in the project root.")
+        st.stop()
+    df = pd.read_csv(DATA_PATH, parse_dates=["date"])
+    df.sort_values("date", inplace=True)
+    return df
 
 df = load_data()
 
-st.subheader("📊 Sample Data")
-st.dataframe(df.head())
+# ------------------------------------
+# FEATURE ENGINEERING
+# ------------------------------------
+def feature_engineering(df):
+    df = df.copy()
 
-st.subheader("🔢 Enter Input Features")
+    df["comp_avg_price"] = df[["comp1_price","comp2_price","comp3_price"]].mean(axis=1)
+    df["price_vs_comp"] = df["price"] - df["comp_avg_price"]
+    df["price_vs_cost"] = df["price"] - df["cost"]
 
-# ---- INPUT FIELDS (adjust based on your model features) ----
-price = st.number_input("Current Price", value=100.0)
-cost = st.number_input("Cost", value=80.0)
-comp_avg_price = st.number_input("Competitor Avg Price", value=98.0)
+    df["price_lag_1"] = df["price"].shift(1)
+    df["price_lag_7"] = df["price"].shift(7)
 
-price_vs_comp = price - comp_avg_price
-price_vs_cost = price - cost
+    df["price_ma_7"] = df["price"].rolling(7).mean()
+    df["price_ma_14"] = df["price"].rolling(14).mean()
 
-price_lag_1 = st.number_input("Price Lag 1", value=99.0)
-price_lag_7 = st.number_input("Price Lag 7", value=97.0)
+    df["day_of_week"] = df["date"].dt.weekday
+    df["month"] = df["date"].dt.month
 
-price_ma_7 = st.number_input("7 Day Moving Avg", value=98.5)
-price_ma_14 = st.number_input("14 Day Moving Avg", value=97.8)
+    df.dropna(inplace=True)
 
-day_of_week = st.selectbox("Day of Week (0=Mon)", list(range(7)))
-month = st.selectbox("Month", list(range(1, 13)))
+    # Demand proxy
+    df["demand_proxy"] = -1 * df["price_vs_comp"] + 0.5 * df["price_ma_7"]
 
-# Create input array
-input_data = np.array([[ 
-    price, cost, comp_avg_price,
-    price_vs_comp, price_vs_cost,
-    price_lag_1, price_lag_7,
-    price_ma_7, price_ma_14,
-    day_of_week, month
-]])
+    return df
 
-# Prediction
-if st.button("🔮 Predict"):
-    prediction = model.predict(input_data)
-    st.success(f"✅ Predicted Value: **{prediction[0]:.2f}**")
+df_fe = feature_engineering(df)
+
+# ------------------------------------
+# TRAIN MODEL
+# ------------------------------------
+@st.cache_resource
+def train_model(df):
+    FEATURES = [
+        "price","cost","comp_avg_price",
+        "price_vs_comp","price_vs_cost",
+        "price_lag_1","price_lag_7",
+        "price_ma_7","price_ma_14",
+        "day_of_week","month"
+    ]
+
+    X = df[FEATURES]
+    y = df["demand_proxy"]
+
+    X_train, _, y_train, _ = train_test_split(
+        X, y, test_size=0.2, shuffle=False
+    )
+
+    model = XGBRegressor(
+        n_estimators=300,
+        max_depth=5,
+        learning_rate=0.05,
+        subsample=0.8,
+        random_state=42
+    )
+
+    model.fit(X_train, y_train)
+    return model, FEATURES
+
+model, FEATURES = train_model(df_fe)
+
+# ------------------------------------
+# PRICE OPTIMIZATION
+# ------------------------------------
+def recommend_price(today, model):
+    last_price = today["price"]
+    cost = today["cost"]
+
+    comp_avg = np.mean([
+        today["comp1_price"],
+        today["comp2_price"],
+        today["comp3_price"]
+    ])
+
+    candidate_prices = np.linspace(
+        last_price * (1 - MAX_DAILY_CHANGE),
+        last_price * (1 + MAX_DAILY_CHANGE),
+        20
+    )
+
+    best_price, best_profit = None, -np.inf
+
+    for p in candidate_prices:
+        if p < cost * (1 + MIN_MARGIN):
+            continue
+        if abs(p - comp_avg) / comp_avg > COMPETITIVE_LIMIT:
+            continue
+
+        row = {
+            "price": p,
+            "cost": cost,
+            "comp_avg_price": comp_avg,
+            "price_vs_comp": p - comp_avg,
+            "price_vs_cost": p - cost,
+            "price_lag_1": last_price,
+            "price_lag_7": last_price,
+            "price_ma_7": last_price,
+            "price_ma_14": last_price,
+            "day_of_week": today["day_of_week"],
+            "month": today["month"]
+        }
+
+        X_pred = pd.DataFrame([row])[FEATURES]
+        demand = model.predict(X_pred)[0]
+        profit = (p - cost) * demand
+
+        if profit > best_profit:
+            best_profit = profit
+            best_price = p
+
+    return round(best_price, 2), round(best_profit, 2)
+
+# ------------------------------------
+# TODAY INPUTS
+# ------------------------------------
+st.sidebar.header("📥 Today's Inputs")
+
+today_data = {
+    "price": st.sidebar.number_input("Last Price", value=float(df["price"].iloc[-1])),
+    "cost": st.sidebar.number_input("Today's Cost", value=float(df["cost"].iloc[-1])),
+    "comp1_price": st.sidebar.number_input("Competitor 1 Price", value=float(df["comp1_price"].iloc[-1])),
+    "comp2_price": st.sidebar.number_input("Competitor 2 Price", value=float(df["comp2_price"].iloc[-1])),
+    "comp3_price": st.sidebar.number_input("Competitor 3 Price", value=float(df["comp3_price"].iloc[-1])),
+    "day_of_week": st.sidebar.selectbox("Day of Week", list(range(7))),
+    "month": st.sidebar.selectbox("Month", list(range(1,13)))
+}
+
+# ------------------------------------
+# OUTPUT
+# ------------------------------------
+if st.sidebar.button("🚀 Recommend Price"):
+    price, profit = recommend_price(today_data, model)
+
+    st.success("Pricing Recommendation Generated")
+
+    col1, col2 = st.columns(2)
+    col1.metric("💰 Recommended Price", f"₹ {price}")
+    col2.metric("📈 Expected Profit Index", profit)
+
+    st.subheader("📄 Input Summary")
+    st.json(today_data)
+
+# ------------------------------------
+# DATA PREVIEW
+# ------------------------------------
+with st.expander("📊 View Processed Data"):
+    st.dataframe(df_fe.tail(20))
