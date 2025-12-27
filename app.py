@@ -210,6 +210,7 @@ if st.session_state.run:
         ax.set_xlabel("Price (₹)")
         ax.set_ylabel("Expected Profit")
         st.pyplot(fig)
+        
 
     with tab2:
         fig, ax = plt.subplots()
