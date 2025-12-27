@@ -9,21 +9,18 @@ import os
 # ----------------------------------
 # PAGE CONFIG
 # ----------------------------------
-st.set_page_config(page_title="Fuel Price Optimization", layout="wide")
+st.set_page_config(
+    page_title="Fuel Price Optimization",
+    layout="wide"
+)
 
 # ----------------------------------
-# SESSION STATE
-# ----------------------------------
-if "run" not in st.session_state:
-    st.session_state.run = False
-
-# ----------------------------------
-# DARK THEME
+# CUSTOM DARK THEME
 # ----------------------------------
 st.markdown("""
 <style>
 .stApp { background-color: #0e1117; color: white; }
-h1, h2, h3 { color: white; }
+h1, h2, h3, h4 { color: #ffffff; }
 .stButton>button {
     background: linear-gradient(90deg,#ff4b4b,#ff6b6b);
     color: white;
@@ -31,6 +28,11 @@ h1, h2, h3 { color: white; }
     height: 3em;
     border-radius: 10px;
     width: 100%;
+}
+.stMetric {
+    background-color: #161a23;
+    padding: 15px;
+    border-radius: 10px;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -49,7 +51,7 @@ DATA_PATH = "oil.csv"
 @st.cache_data
 def load_data():
     if not os.path.exists(DATA_PATH):
-        st.error("❌ oil.csv not found")
+        st.error("❌ oil.csv not found in project folder")
         st.stop()
     df = pd.read_csv(DATA_PATH, parse_dates=["date"])
     df.sort_values("date", inplace=True)
@@ -62,16 +64,23 @@ df = load_data()
 # ----------------------------------
 def feature_engineering(df):
     df = df.copy()
+
     df["comp_avg_price"] = df[["comp1_price","comp2_price","comp3_price"]].mean(axis=1)
     df["price_vs_comp"] = df["price"] - df["comp_avg_price"]
     df["price_vs_cost"] = df["price"] - df["cost"]
+
     df["price_lag_1"] = df["price"].shift(1)
     df["price_lag_7"] = df["price"].shift(7)
+
     df["price_ma_7"] = df["price"].rolling(7).mean()
     df["price_ma_14"] = df["price"].rolling(14).mean()
+
     df["day_of_week"] = df["date"].dt.weekday
     df["month"] = df["date"].dt.month
+
     df.dropna(inplace=True)
+
+    # Demand proxy
     df["demand_proxy"] = -df["price_vs_comp"] + 0.5 * df["price_ma_7"]
     return df
 
@@ -96,7 +105,7 @@ def train_model(df):
     X_train, _, y_train, _ = train_test_split(X, y, shuffle=False)
 
     model = XGBRegressor(
-        n_estimators=200,
+        n_estimators=300,
         max_depth=5,
         learning_rate=0.05,
         subsample=0.8,
@@ -108,42 +117,62 @@ def train_model(df):
 model, FEATURES = train_model(df_fe)
 
 # ----------------------------------
-# SIDEBAR RULES
+# SIDEBAR – BUSINESS RULES
 # ----------------------------------
-st.sidebar.header("🎯 Business Rules")
+st.sidebar.header("🎯 Business Rules / Constraints")
 
-MAX_DAILY_CHANGE = st.sidebar.slider("Max price change (₹)", 0.1, 2.0, 0.75)
-MIN_MARGIN = st.sidebar.slider("Min margin (₹)", 0.1, 3.0, 0.50)
-MAX_COMP_DIFF = st.sidebar.slider("Max above competitors (₹)", 0.1, 3.0, 1.50)
+MAX_DAILY_CHANGE = st.sidebar.slider(
+    "Max price change per day (₹)",
+    0.1, 2.0, 0.75
+)
+
+MIN_MARGIN = st.sidebar.slider(
+    "Minimum margin per liter (₹)",
+    0.1, 3.0, 0.50
+)
+
+MAX_COMP_DIFF = st.sidebar.slider(
+    "Max price above competitors (₹)",
+    0.1, 3.0, 1.50
+)
+
+st.sidebar.info("💡 Adjust constraints based on market strategy")
 
 # ----------------------------------
-# INPUTS
+# MAIN INPUTS
 # ----------------------------------
-st.subheader("📥 Today's Market Inputs")
+st.subheader("📥 Enter Today's Market Inputs")
 
-c1, c2 = st.columns(2)
+col1, col2 = st.columns(2)
 
-with c1:
+with col1:
     input_date = st.date_input("Date", date.today())
-    last_price = st.number_input("Last Company Price (₹)", value=float(df["price"].iloc[-1]))
-    cost = st.number_input("Today's Cost (₹)", value=float(df["cost"].iloc[-1]))
+    last_price = st.number_input("Last Observed Company Price (₹)", value=float(df["price"].iloc[-1]))
+    cost = st.number_input("Today's Cost per Liter (₹)", value=float(df["cost"].iloc[-1]))
 
-with c2:
-    comp1 = st.number_input("Competitor 1 (₹)", value=float(df["comp1_price"].iloc[-1]))
-    comp2 = st.number_input("Competitor 2 (₹)", value=float(df["comp2_price"].iloc[-1]))
-    comp3 = st.number_input("Competitor 3 (₹)", value=float(df["comp3_price"].iloc[-1]))
+with col2:
+    comp1 = st.number_input("Competitor 1 Price (₹)", value=float(df["comp1_price"].iloc[-1]))
+    comp2 = st.number_input("Competitor 2 Price (₹)", value=float(df["comp2_price"].iloc[-1]))
+    comp3 = st.number_input("Competitor 3 Price (₹)", value=float(df["comp3_price"].iloc[-1]))
 
 # ----------------------------------
-# ANALYSIS FUNCTION
+# PRICE OPTIMIZATION LOGIC
 # ----------------------------------
-def build_analysis_df():
+def recommend_price():
     comp_avg = np.mean([comp1, comp2, comp3])
-    prices = np.linspace(last_price - MAX_DAILY_CHANGE,
-                         last_price + MAX_DAILY_CHANGE, 25)
 
-    rows = []
-    for p in prices:
-        if p < cost + MIN_MARGIN or p > comp_avg + MAX_COMP_DIFF:
+    candidate_prices = np.linspace(
+        last_price - MAX_DAILY_CHANGE,
+        last_price + MAX_DAILY_CHANGE,
+        25
+    )
+
+    best_price, best_profit = None, -np.inf
+
+    for p in candidate_prices:
+        if p < cost + MIN_MARGIN:
+            continue
+        if p > comp_avg + MAX_COMP_DIFF:
             continue
 
         row = pd.DataFrame([{
@@ -163,47 +192,27 @@ def build_analysis_df():
         demand = model.predict(row)[0]
         profit = (p - cost) * demand
 
-        rows.append({
-            "Price (₹)": round(p,2),
-            "Expected Volume": int(demand),
-            "Profit Margin": round(p-cost,2),
-            "Expected Profit": round(profit,2)
-        })
+        if profit > best_profit:
+            best_profit = profit
+            best_price = p
 
-    return pd.DataFrame(rows)
+    return round(best_price, 2), round(best_profit, 2)
 
 # ----------------------------------
-# BUTTON
+# RUN BUTTON
 # ----------------------------------
+st.markdown("<br>", unsafe_allow_html=True)
+
 if st.button("🔍 Run Price Optimization"):
-    st.session_state.run = True
-
-# ----------------------------------
-# RESULTS
-# ----------------------------------
-if st.session_state.run:
-    df_analysis = build_analysis_df()
-    best = df_analysis.loc[df_analysis["Expected Profit"].idxmax()]
+    price, profit = recommend_price()
 
     st.success("✅ Price Optimization Completed")
 
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("Recommended Price", f"₹{best['Price (₹)']}")
-    k2.metric("Expected Volume", f"{best['Expected Volume']:,} L")
-    k3.metric("Expected Profit", f"₹{best['Expected Profit']:,}")
-    k4.metric("Profit Margin", f"₹{best['Profit Margin']}/L")
+    c1, c2 = st.columns(2)
+    c1.metric("💰 Recommended Price (₹)", price)
+    c2.metric("📈 Expected Profit Index", profit)
 
-    st.subheader("📊 Price Optimization Analysis")
-
-    tab1, tab2, tab3 = st.tabs(["📈 Profit Curve", "📊 Volume vs Price", "📄 Data Table"])
-
-    with tab1:
-        st.line_chart(df_analysis.set_index("Price (₹)")["Expected Profit"])
-
-    with tab2:
-        st.bar_chart(df_analysis.set_index("Price (₹)")["Expected Volume"])
-
-    with tab3:
-        st.dataframe(df_analysis, use_container_width=True)
-
+# ----------------------------------
+# FOOTER
+# ----------------------------------
 st.caption("⚠️ ML-based recommendation. Always validate with business context.")
