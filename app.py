@@ -7,6 +7,9 @@ from sklearn.model_selection import train_test_split
 from datetime import date
 import os
 
+if "run" not in st.session_state:
+    st.session_state.run = False
+
 # ----------------------------------
 # PAGE CONFIG
 # ----------------------------------
@@ -246,26 +249,50 @@ def generate_analysis_data():
 st.markdown("<br>", unsafe_allow_html=True)
 
 if st.button("🔍 Run Price Optimization"):
+    st.session_state.run = True
 
+
+  if st.session_state.run:
+
+    # ----------------------------
+    # RUN LOGIC
+    # ----------------------------
     price, profit = recommend_price()
     analysis_df = generate_analysis_data()
 
     expected_volume = int(
-        analysis_df.loc[analysis_df["Price (₹)"] == price, "Expected Volume (L)"].values[0]
+        analysis_df.loc[
+            analysis_df["Price (₹)"] == price,
+            "Expected Volume (L)"
+        ].values[0]
     )
+
     margin = round(price - cost, 2)
 
+    # ----------------------------
     # SUCCESS BANNER
+    # ----------------------------
     st.markdown(
-        "<div style='background:#123f2a;padding:15px;border-radius:8px;color:#7CFFB2;'>"
-        "✅ Price Recommendation Generated Successfully</div>",
+        """
+        <div style="
+            background:#123f2a;
+            padding:15px;
+            border-radius:8px;
+            color:#7CFFB2;
+            font-size:16px;">
+            ✅ Price Recommendation Generated Successfully
+        </div>
+        """,
         unsafe_allow_html=True
     )
 
     st.markdown("<br>", unsafe_allow_html=True)
 
+    # ----------------------------
     # KPI CARDS
+    # ----------------------------
     k1, k2, k3, k4 = st.columns(4)
+
     k1.metric("Recommended Price", f"₹{price}", f"+{round(price-last_price,2)}")
     k2.metric("Expected Volume", f"{expected_volume:,} L")
     k3.metric("Expected Profit", f"₹{round(profit,2):,}")
@@ -274,12 +301,14 @@ if st.button("🔍 Run Price Optimization"):
     st.markdown("<br>", unsafe_allow_html=True)
     st.subheader("📊 Price Optimization Analysis")
 
+    # ----------------------------
     # TABS
+    # ----------------------------
     tab1, tab2, tab3 = st.tabs(
         ["📈 Profit Curve", "📊 Volume vs Price", "📄 Data Table"]
     )
 
-    # -------- PROFIT CURVE --------
+    # PROFIT CURVE
     with tab1:
         fig, ax = plt.subplots()
         ax.plot(
@@ -291,7 +320,7 @@ if st.button("🔍 Run Price Optimization"):
         ax.set_ylabel("Expected Profit (₹)")
         st.pyplot(fig)
 
-    # -------- VOLUME VS PRICE --------
+    # VOLUME VS PRICE
     with tab2:
         fig, ax = plt.subplots()
         ax.bar(
@@ -302,7 +331,8 @@ if st.button("🔍 Run Price Optimization"):
         ax.set_ylabel("Expected Volume (L)")
         st.pyplot(fig)
 
-    # -------- DATA TABLE --------
+    # DATA TABLE
     with tab3:
         st.dataframe(analysis_df, use_container_width=True)
+
 
