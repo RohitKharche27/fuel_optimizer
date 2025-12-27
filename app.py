@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import matplotlib.pyplot as plt
 from xgboost import XGBRegressor
 from sklearn.model_selection import train_test_split
 from datetime import date
@@ -166,6 +167,47 @@ def recommend_price():
         last_price + MAX_DAILY_CHANGE,
         25
     )
+def generate_analysis_data():
+    comp_avg = np.mean([comp1, comp2, comp3])
+
+    prices = np.linspace(
+        last_price - MAX_DAILY_CHANGE,
+        last_price + MAX_DAILY_CHANGE,
+        30
+    )
+
+    rows = []
+
+    for p in prices:
+        if p < cost + MIN_MARGIN or p > comp_avg + MAX_COMP_DIFF:
+            continue
+
+        row = pd.DataFrame([{
+            "price": p,
+            "cost": cost,
+            "comp_avg_price": comp_avg,
+            "price_vs_comp": p - comp_avg,
+            "price_vs_cost": p - cost,
+            "price_lag_1": last_price,
+            "price_lag_7": last_price,
+            "price_ma_7": last_price,
+            "price_ma_14": last_price,
+            "day_of_week": input_date.weekday(),
+            "month": input_date.month
+        }])[FEATURES]
+
+        demand = model.predict(row)[0]
+        profit = (p - cost) * demand
+
+        rows.append({
+            "Price (₹)": round(p, 2),
+            "Expected Volume (L)": int(demand),
+            "Profit Margin (₹/L)": round(p - cost, 2),
+            "Expected Profit (₹)": round(profit, 2)
+        })
+
+    return pd.DataFrame(rows)
+
 
     best_price, best_profit = None, -np.inf
 
